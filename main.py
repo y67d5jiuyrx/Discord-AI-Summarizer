@@ -95,7 +95,7 @@ async def summarize(
         # Generate summary
         logger.info("Generating AI summary...")
         response = bot.openai_client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-3.5-turbo",
             messages=[
                 {
                     "role": "system",
