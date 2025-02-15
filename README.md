@@ -49,7 +49,7 @@ To run the bot locally or on a server, follow these steps:
 4. Run the bot:
 
    ```bash
-   python bot.py
+   python main.py
    ```
 
 <div align="center">
@@ -76,7 +76,7 @@ To summarize the last 50 messages in a channel:
 
 ## Customizing the AI Model
 
-By default, the bot uses `gpt-3.5-turbo`, which is optimized for speed and cost efficiency. However, for a more detailed and nuanced analysis, you can change the model to `gpt-4` in `bot.py`:
+By default, the bot uses `gpt-3.5-turbo`, which is optimized for speed and cost efficiency. However, for a more detailed and nuanced analysis, you can change the model to `gpt-4` in `main.py`:
 
 ```python
 response = bot.openai_client.chat.completions.create(
