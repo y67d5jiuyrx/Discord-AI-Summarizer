@@ -4,73 +4,65 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+)
+logger = logging.getLogger('discord.bot')
 
 # Load environment variables
 load_dotenv()
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+class SummaryBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.members = True
+        intents.guilds = True
 
-# Configuration
-REQUIRED_ROLE_ID = int(os.getenv("REQUIRED_ROLE_ID"))
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+        super().__init__(
+            command_prefix='!',
+            intents=intents,
+            help_command=None
+        )
 
-# Initialize OpenAI client
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        self.required_role_id = int(os.getenv("REQUIRED_ROLE_ID"))
+        self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+    async def setup_hook(self):
+        await self.tree.sync()
+        logger.info("Commands synced globally")
 
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user.name}")
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} commands")
-    except Exception as e:
-        print(e)
-
-
-def format_messages(messages):
-    return "\n".join(
-        [f"{message.author.display_name}: {message.content}"
-         for message in reversed(messages) if message.content]
-    )
+    async def on_ready(self):
+        logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        logger.info(
+            f"Invite URL: https://discord.com/api/oauth2/authorize?client_id={self.user.id}&permissions=277025770560&scope=bot%20applications.commands")
 
 
-async def generate_ai_summary(messages):
-    conversation = format_messages(messages)
-
-    response = openai_client.chat.completions.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system",
-             "content": "You are a Discord conversation analyst. Create a structured summary including key points, participants, and notable messages."},
-            {"role": "user",
-             "content": f"Analyze this conversation:\n{conversation}\n\nProvide a comprehensive summary with markdown formatting."}
-        ],
-        temperature=0.7,
-        max_tokens=1500
-    )
-    return response.choices[0].message.content
+bot = SummaryBot()
 
 
-@bot.tree.command(name="summarize", description="Summarize channel messages using AI")
+@bot.tree.command(name="summarize", description="Summarize a channel's messages using AI")
 @app_commands.describe(
     channel="The channel to summarize",
     message_count="Number of messages to analyze (1-200)"
 )
 async def summarize(interaction: discord.Interaction, channel: discord.TextChannel, message_count: int):
-    # Check role permission
-    if not any(role.id == REQUIRED_ROLE_ID for role in interaction.user.roles):
+    logger.debug(f"Command invoked by {interaction.user} in {channel.guild.name}")
+
+    # Check permissions
+    if not any(role.id == bot.required_role_id for role in interaction.user.roles):
+        logger.warning(f"Permission denied for {interaction.user}")
         return await interaction.response.send_message(
             "⛔ You don't have permission to use this command!",
             ephemeral=True
         )
 
-    # Validate message count
+    # Validate input
     if not 1 <= message_count <= 200:
         return await interaction.response.send_message(
             "❌ Please choose a number between 1 and 200",
@@ -81,28 +73,50 @@ async def summarize(interaction: discord.Interaction, channel: discord.TextChann
 
     try:
         # Fetch messages
+        logger.info(f"Fetching {message_count} messages from #{channel.name}")
         messages = [message async for message in channel.history(limit=message_count) if message.content]
+
         if not messages:
             return await interaction.followup.send("❌ No messages found in this channel!")
 
-        # Generate summary
-        summary = await generate_ai_summary(messages)
+        # Prepare conversation history
+        conversation = "\n".join(
+            [f"{message.author.display_name}: {message.content}"
+             for message in reversed(messages)]
+        )
 
-        # Create embed
+        # Generate summary
+        logger.info("Generating AI summary...")
+        response = bot.openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system",
+                 "content": "You are a professional conversation analyst. Create a detailed summary of this Discord conversation."},
+                {"role": "user",
+                 "content": f"Analyze this conversation and provide a comprehensive summary:\n\n{conversation}"}
+            ],
+            temperature=0.5,
+            max_tokens=2000
+        )
+
+        summary = response.choices[0].message.content
+
+        # Create and send embed
         embed = discord.Embed(
             title=f"📝 Summary of #{channel.name}",
             description=summary,
-            color=0x00ff00
+            color=discord.Color.blurple()
         )
-        embed.set_footer(text=f"Analyzed {len(messages)} messages")
+        embed.add_field(name="Messages Analyzed", value=len(messages))
+        embed.add_field(name="Time Range",
+                        value=f"{messages[-1].created_at.strftime('%Y-%m-%d %H:%M')} - {messages[0].created_at.strftime('%Y-%m-%d %H:%M')}")
 
         await interaction.followup.send(embed=embed)
 
-    except discord.Forbidden:
-        await interaction.followup.send("🔒 Missing permissions to read that channel!")
     except Exception as e:
-        await interaction.followup.send(f"❌ Error: {str(e)}")
+        logger.error(f"Error: {str(e)}")
+        await interaction.followup.send(f"❌ Failed to generate summary: {str(e)}")
 
 
 if __name__ == "__main__":
-    bot.run(DISCORD_TOKEN)
+    bot.run(os.getenv("DISCORD_TOKEN"))
